@@ -1,0 +1,514 @@
+# 모든 변수를 null로 설정
+list_of_variables <- ls()
+for (var in list_of_variables) {
+  assign(var, NULL)
+}
+
+# 메모리에서 변수 삭제
+rm(list = list_of_variables)
+
+# 가비지 컬렉터를 호출하여 메모리 정리
+gc()
+
+# 전처리 과정
+library(forecast)
+library(data.table)
+library(caret)
+library(dplyr)
+library(outliers)
+library(imputeTS)
+library(TTR)
+library(tseries)
+library(lubridate)  # 날짜 연산에 사용
+library(prophet)
+library(readxl)
+
+setwd("C:/codelab1/")
+library(readxl)
+X2310fin <- read_excel("bread_final.xlsx", sheet = "Sheet1")
+View(X2310fin)
+	
+	# 데이터 준비
+	df <- X2310fin
+	raw <- X2310fin
+
+selected_pg <- "ALLPG"  # 원하는 PG 값을 지정하세요. 예: "APPLE"
+
+# 선택한 PG에 해당하는 데이터 필터링
+df <- df[df$PG == selected_pg, ]
+
+
+# 시계열 분해 수행
+ts_data <- ts(df$Va, frequency = 12)
+decomposed_data <- decompose(ts_data, type = "additive")  # "additive" 또는 "multiplicative"로 설정
+
+# 추세(Trend), 계절성(Seasonal), 랜덤(Residual) 성분 출력
+trend_component <- decomposed_data$trend
+seasonal_component <- decomposed_data$seasonal
+residual_component <- decomposed_data$random
+
+# 시각화
+par(mfrow=c(3,1))
+plot(trend_component, main="Trend Component")
+plot(seasonal_component, main="Seasonal Component")
+plot(residual_component, main="Residual Component")
+
+data<-data.table(df)
+
+# Va 변수와 CSI 변수들에 대한 로그 변환
+# 음수 값을 처리하기 위한 최소 양수 값 추가
+min_positive_value <- abs(min(data$Va, min(sapply(data[, .SD, .SDcols = patterns("^CSI")], min)))) + 1
+data[, Va_log := log(Va + min_positive_value, base = exp(1))]
+for (i in 1:83) {
+  col_name <- paste("CSI", i, sep = "")
+  data[, (col_name) := log(get(col_name) + min_positive_value, base = exp(1))]
+}
+
+# 시작 연도와 월 설정
+start_year <- 2017
+start_month <- 1
+
+# 데이터 빈도 설정 (월별 데이터인 경우)
+frequency <- 12
+
+# 데이터의 기간 계산
+num_months <- nrow(data)
+
+# 로그 변환된 데이터를 사용하여 시계열 객체로 변환
+ts_data <- ts(data[, c("Va_log", paste0("CSI", 1:83))], 
+              start = c(start_year, start_month), 
+              frequency = frequency)
+library(car)
+library(stats)
+
+# 회귀분석 수행
+significant_csi_vars <- character(0)  # 유의한 csi 변수를 저장할 빈 문자열 벡터 생성
+for (i in 1:83) {
+  col_name <- paste("CSI", i, sep = "")
+  formula <- as.formula(paste("Va_log ~", col_name))
+  model <- lm(formula, data = data)
+  
+  # 회귀분석 결과에서 p-value 추출
+  p_value <- summary(model)$coefficients[2, "Pr(>|t|)"]
+  
+  # p-value가 유의수준(예: 0.05)보다 작으면 해당 csi 변수를 선택
+  if (p_value < 0.001) {
+    significant_csi_vars <- c(significant_csi_vars, col_name)
+  }
+}
+
+# 만약 유의한 csi 변수가 없으면 모든 csi 변수를 significant_csi_vars에 저장
+if (length(significant_csi_vars) == 0) {
+  significant_csi_vars <- paste("CSI", 1:83, sep = "")
+}
+
+library(car) # VIF를 계산하기 위해 필요
+
+# significant_csi_vars에 "Va_log"를 포함시킵니다.
+cols <- c("Va_log", significant_csi_vars)
+
+# .SD를 사용하여 해당 열만 선택하고, lm() 함수에 적용
+model <- lm(Va_log ~ ., data = data[, .SD, .SDcols = cols])
+
+# VIF 계산
+vif_values <- vif(model)
+print(vif_values) # VIF 값을 출력
+
+# VIF 값이 5(혹은 선택한 기준) 이상인 변수 제거
+high_vif_vars <- names(vif_values[vif_values > 15])
+reduced_vars <- significant_csi_vars[!significant_csi_vars %in% high_vif_vars]
+
+# 다중공선성이 낮은 변수들만을 유지
+significant_csi_vars <- reduced_vars
+
+# 유의한 csi 변수 출력
+print(significant_csi_vars)
+
+reduced_indep<-significant_csi_vars
+
+# ts 객체를 데이터 프레임으로 변환
+ts_data_df <- data.frame(ts_data)
+col_names <- c("Va_log", "CSI1", "CSI2", "CSI3", "CSI4", "CSI5", "CSI6", "CSI7", "CSI8", "CSI9",
+"CSI10", "CSI11", "CSI12", "CSI13", "CSI14", "CSI15", "CSI16", "CSI17", "CSI18", "CSI19", "CSI20",
+"CSI21", "CSI22", "CSI23", "CSI24", "CSI25", "CSI26", "CSI27","CSI28",
+"CSI29","CSI30","CSI31","CSI32","CSI33","CSI34","CSI35","CSI36","CSI37","CSI38","CSI39",
+"CSI40","CSI41","CSI42","CSI43","CSI44","CSI45","CSI46","CSI47","CSI48","CSI49","CSI50",
+"CSI51","CSI52","CSI53","CSI54","CSI55","CSI56","CSI57","CSI58","CSI59","CSI60","CSI61","CSI62","CSI63"
+,"CSI64","CSI65","CSI66","CSI67","CSI68","CSI69","CSI70","CSI71","CSI72","CSI73","CSI74"
+,"CSI75","CSI76","CSI77","CSI78","CSI79","CSI80","CSI81","CSI82","CSI83")
+
+# 상호작용항 생성
+for (i in 1:(length(reduced_indep) - 1)) {
+    for (j in (i + 1):length(reduced_indep)) {
+        new_col_name <- paste(reduced_indep[i], reduced_indep[j], sep = "_")
+        ts_data_df[[new_col_name]] <- ts_data_df[[reduced_indep[i]]] * ts_data_df[[reduced_indep[j]]]
+    }
+}
+
+library(data.table)
+
+# data.table로 변환
+ts_data_dt <- as.data.table(ts_data_df)
+
+# 변수의 조합을 3개까지만 제한하여 상호작용항 생성
+for(n in 2:min(length(reduced_indep), 3)) {
+  combn(reduced_indep, n, function(combo) {
+    new_col_name <- paste(combo, collapse = "_")
+    ts_data_dt[, (new_col_name) := Reduce(`*`, .SD), .SDcols = combo]
+  }, simplify = FALSE)
+}
+
+# 결과 확인
+head(ts_data_dt)
+ts_data_df <- as.data.frame(ts_data_dt)
+
+
+# ts_data_df에서 CSI가 포함된 상호작용항만 추출
+interaction_terms <- names(ts_data_df)[grepl("CSI", names(ts_data_df)) & grepl("_", names(ts_data_df))]
+
+# 새로운 변수 목록 업데이트 (기존 변수와 상호작용 변수 포함)
+new_vars <- c(reduced_indep, interaction_terms)
+
+# Va_log에 대한 회귀분석 수행 및 유의한 독립변수 추출
+significant_vars <- c()
+for (var in new_vars) {
+    formula <- as.formula(paste("Va_log ~", var))
+    model <- lm(formula, data = ts_data_df)
+    if (summary(model)$coefficients[2, 4] < 0.001) {  # p-value < 0.05
+        significant_vars <- c(significant_vars, var)
+    }
+}
+
+# 유의한 변수들만 포함된 ts_data_final 생성
+ts_data_final <- ts(ts_data_df[, c("Va_log", significant_vars)], start = c(2017, 1), frequency = 12)
+data<-ts_data_final
+
+
+# 새로운 변수 목록 업데이트 (기존 변수와 상호작용 변수 포함)
+new_vars <- significant_vars
+
+library(lmtest)
+
+# 변수 초기화
+significant_vars <- character(0)
+best_p_value <- Inf
+best_var <- NULL
+best_lag <- NULL
+
+for (var in new_vars) {
+    for (lag in 1:18) {  # 1부터 12까지 양수 시차만 고려
+        # 시차가 양수인 변수에 대해 Granger Causality Test 수행
+        test_result <- grangertest(as.formula(paste("Va_log ~", var)), order = lag, data = data)
+        
+        # 두 번째 모델의 p-value 추출
+        p_value <- test_result$`Pr(>F)`[2]
+
+        # 가장 낮은 p-value를 가진 변수 선택
+        if (!is.na(p_value) && p_value < 0.001 && p_value < best_p_value) {
+            best_p_value <- p_value
+            best_var <- var
+            best_lag <- lag
+        }
+    }
+}
+
+
+# 유의한 변수들 중 가장 좋은 결과를 보인 변수와 시차 정보 저장
+if (!is.null(best_var)) {
+    significant_vars <- c(significant_vars, best_var)
+}
+
+# 최적의 변수 출력
+print(paste("Best variable by Granger Causality:", best_var))
+
+# 최적 변수의 시차 출력
+cat("최적 변수의 시차:", best_lag, "\n")
+
+# 최적 변수의 p-value 출력
+cat("최적 변수의 p-value:", best_p_value, "\n")
+
+# 시계열 분석 시작
+	library(forecast)
+	library(zoo)
+	
+# 외생변수 불러오기
+	xreg <- as.matrix(data[, best_var])
+	
+# 시작 인덱스 설정 시 best lag를 주의해야 함
+# 1달 전이면 2023년 12월 데이터를 2023년 11월 데이터로 예측함.
+# 9달 전이면 2024년 12월 데이터를 2024년 3월 데이터로 예측함
+# 시차에 따라서 외생변수 미래 값도 다르게 예측해야 함
+# 따라서 lag에 맞게 예측 수를 늘려야 함
+# 2024년 12월 기준 몇 월 데이터를 사용해야 하는 지 계산 >  계산 후 2023년 11월부터 그 만큼의 기간까지 예측 > 추후 range에 start / end 순서로 넣음
+	
+	h=12-best_lag
+	# 외생변수의 미래 값 예측 
+	xreg_arima_model <- auto.arima(xreg, stepwise=FALSE, seasonal=FALSE, D=1, max.P=2, max.Q=2)
+	xreg_future_forecast <- forecast(xreg_arima_model, h=h) 
+	future_xreg_mean <- xreg_future_forecast$mean
+	
+	# future_xreg를 데이터 프레임으로 변환
+	future_xreg_df <- data.frame(future_xreg_mean)
+	
+	# 데이터 프레임을 행렬로 변환
+	future_xreg<- as.matrix(future_xreg_df)
+	
+	# 예측된 외생변수와 기존 외생변수 결합
+	xreg_extended<- rbind(xreg, future_xreg)
+	
+	# 시차 적용 함수
+	apply_lag <- function(xreg,lag) {
+	  if (lag > 0) {
+	    lagged_xreg <- c(rep(NA, lag), xreg[1:(length(xreg) - lag)])
+	  } else {
+	    lagged_xreg <- xreg
+	  }
+	  return(lagged_xreg)
+	}
+	
+	# 외생변수에 시차 적용
+	lagged_xreg <- apply_lag(xreg_extended, best_lag)
+	
+	# 시작 부분의 NA 값을 첫 번째 유효한 값으로 대체
+	first_valid_value <- lagged_xreg[which(!is.na(lagged_xreg))[1]]
+	lagged_xreg[is.na(lagged_xreg)] <- first_valid_value
+	
+	# 최종적으로 사용할 외생변수
+	xreg <- lagged_xreg
+	training_xreg <- tail(xreg, 84)
+	
+	# 확인을 위해 training_xreg의 길이 출력
+	length(training_xreg)
+	
+	df2<-data.frame(data)
+	sar <- ts(df2$Va_log, start=c(2017, 1), end=c(2023, 12), frequency=12)
+	
+	# 예측 시작 시점을 2023년 11월로 설정
+	start_prediction <- c(2024, 1)
+	
+	lagged_xreg
+	
+	# xreg 시작 인덱스 
+	xreg_start_index <- length(lagged_xreg)-84 # best_lag 시점에 맞게 계산을 직접 해야 함. 
+	
+	# xreg 종료 인덱스 (2023년 12월)
+	xreg_end_index <- length(lagged_xreg)  # 2024년 1월은 2023년 2월부터 11개월 후
+	
+	# xreg 데이터 선택
+	xreg_for_forecast <- xreg[xreg_start_index:xreg_end_index]
+	
+	# 초기 SARIMA 모델링 및 예측 (로그-차분된 데이터 사용)
+	initial_auto_sarima_model <- auto.arima(sar, xreg=training_xreg, seasonal=TRUE, stepwise=FALSE)
+	initial_fc_value <- forecast(initial_auto_sarima_model, xreg=training_xreg, h=84)
+	initial_fc_original_scale <- exp(initial_fc_value$mean)  # 로그 스케일 복원
+	initial_fitted_value <- fitted(initial_auto_sarima_model)
+	
+	# SARIMA 모델 하이퍼파라미터 튜닝
+	decomposed_data <- decompose(sar, type = "additive")
+	tuned_sarima_model <- auto.arima(sar, xreg=training_xreg, seasonal = TRUE, stepwise = FALSE, approximation = FALSE,
+	                                 trace = TRUE,
+	                                 ic = c("aicc", "aic", "bic"), test = "kpss")
+	
+sarima_order<-c(1,0,0) 
+sarima_seasonal_order <- c(2,1,0)
+
+# 시차 적용된 외생변수를 SARIMA 모델에 사용
+final_sarimax_model <- Arima(sar, xreg=training_xreg,
+                             order = sarima_order, seasonal = sarima_seasonal_order)
+
+# 예측 수행
+h=84
+sarimax_future_forecast <- forecast(final_sarimax_model, h=h, xreg=xreg_for_forecast)
+
+# 로그 스케일 역변환
+restored_forecast <- exp(sarimax_future_forecast$mean)
+
+# 결과를 데이터 프레임으로 변환
+data.frame(restored_forecast)
+
+# MAPE, MASE 계산
+library(forecast)
+library(tseries)
+library(urca)
+library(vars)
+
+	## 시계열 분석 시작
+	library(forecast)
+	library(zoo)
+
+
+# 외생변수와 타겟 변수 준비
+# df 데이터 프레임에서 2019년부터 2022년까지의 타겟 변수와 외생변수 데이터 추출
+# 'df'에서 'Period'와 'Month' 열만 선택
+selected_columns <- df[, c("Year", "Month")]
+# 'selected_columns'를 'ts_data_fin'에 열 방향으로 결합
+ts_data_fi<-data.frame(ts_data_final)
+ts_data_fin <- cbind(ts_data_fi, selected_columns)
+
+training_data <- ts_data_fin[ts_data_fin$Year <= 2022, ]
+xreg_training <- training_data[, best_var, drop=FALSE]  # 외생변수 선택, drop=FALSE는 하나의 컬럼 선택 시 데이터 프레임 유지
+
+h=12
+	# 외생변수의 미래 값 예측 
+	xreg_arima_model <- auto.arima(xreg_training, stepwise=FALSE, seasonal=FALSE, D=1, max.P=2, max.Q=2)
+	xreg_future_forecast <- forecast(xreg_arima_model, h=h) 
+	future_xreg_mean <- xreg_future_forecast$mean
+	
+	# future_xreg를 데이터 프레임으로 변환
+	future_xreg_df <- data.frame(future_xreg_mean)
+	
+	# 데이터 프레임을 행렬로 변환
+	future_xreg<- as.matrix(future_xreg_df)
+	
+# future_xreg 행렬에 컬럼 이름 설정
+colnames(future_xreg) <- colnames(xreg_training)
+
+# 예측된 외생변수와 기존 외생변수 결합
+xreg_extended <- rbind(xreg_training, future_xreg)
+	
+	
+apply_lag_df <- function(df, lag) {
+  lagged_df <- df  # 데이터 프레임 복사
+  if (lag > 0) {
+    for (col in names(df)) {
+      # NA로 시작하는 벡터 생성 후, 원래 데이터에서 lag만큼 제외하고 붙임
+      lagged_df[[col]] <- c(rep(NA, lag), df[[col]][1:(nrow(df) - lag)])
+    }
+  }
+  return(lagged_df)
+}
+	
+	
+	# 외생변수에 시차 적용
+	lagged_xreg <- apply_lag_df(xreg_extended, best_lag)
+	
+# 모든 컬럼에 대해 첫 번째 유효한 값으로 NA 대체
+for(col in names(lagged_xreg)) {
+  # 해당 컬럼에서 첫 번째 유효한 값 찾기
+  first_valid_value <- lagged_xreg[[col]][which(!is.na(lagged_xreg[[col]]))[1]]
+  # 해당 컬럼의 NA 값을 첫 번째 유효한 값으로 대체
+  lagged_xreg[[col]][is.na(lagged_xreg[[col]])] <- first_valid_value
+}
+
+	lagged_xreg <- as.matrix(lagged_xreg)
+
+	# 최종적으로 사용할 외생변수
+	training_xreg <- tail(lagged_xreg, 72
+	)
+	
+	# 확인을 위해 training_xreg의 길이 출력
+	length(training_xreg)
+	
+	df2<-data.frame(training_data)
+	sar <- ts(df2$Va_log, start=c(2017, 1), end=c(2022, 12), frequency=12)
+	
+	# 예측 시작 시점을 2023년 11월로 설정
+	start_prediction <- c(2023, 1)
+	
+	
+	# xreg 시작 인덱스 
+	xreg_start_index <- length(lagged_xreg)-71 # best_lag 시점에 맞게 계산을 직접 해야 함. 
+	
+	# xreg 종료 인덱스 (2023년 12월)
+	xreg_end_index <- length(lagged_xreg)  # 2024년 1월은 2023년 2월부터 11개월 후
+	
+	# xreg 데이터 선택
+	xreg_for_forecast <- lagged_xreg[xreg_start_index:xreg_end_index, ]
+	
+
+	# 초기 SARIMA 모델링 및 예측 (로그-차분된 데이터 사용)
+	initial_auto_sarima_model <- auto.arima(sar, xreg=training_xreg, seasonal=TRUE, stepwise=FALSE)
+	initial_fc_value <- forecast(initial_auto_sarima_model, xreg=training_xreg, h=12)
+	initial_fc_original_scale <- exp(initial_fc_value$mean)  # 로그 스케일 복원
+	initial_fitted_value <- fitted(initial_auto_sarima_model)
+	
+	# SARIMA 모델 하이퍼파라미터 튜닝
+	decomposed_data <- decompose(sar, type = "additive")
+	tuned_sarima_model <- auto.arima(sar, xreg=training_xreg, seasonal = TRUE, stepwise = FALSE, approximation = FALSE,
+	                                 trace = TRUE,
+	                                 ic = c("aicc", "aic", "bic"), test = "kpss")
+	
+sarima_order<-c(1,0,0) 
+sarima_seasonal_order <- c(2,1,0)
+
+
+# 시차 적용된 외생변수를 SARIMA 모델에 사용
+final_sarimax_model <- Arima(sar, xreg=training_xreg,
+                             order = sarima_order, seasonal = sarima_seasonal_order)
+
+# 예측 수행
+h=12
+sarimax_future_forecast <- forecast(final_sarimax_model, h=h, xreg=xreg_for_forecast)
+
+# 로그 스케일 역변환
+restored_forecast <- exp(sarimax_future_forecast$mean)
+
+# 결과를 데이터 프레임으로 변환
+data.frame(restored_forecast)
+
+# MAPE와 MASE의 계산 결과 평가 및 출력
+evaluate_performance <- function(mape_value, mase_value, mape_threshold, mase_threshold) {
+  if (mape_value > mape_threshold) {
+    cat("MAPE:", mape_value, "- 부적합 (기준 초과)\n")
+  } else {
+    cat("MAPE:", mape_value, "- 적합\n")
+  }
+  
+  if (mase_value > mase_threshold) {
+    cat("MASE:", mase_value, "- 부적합 (기준 초과)\n")
+  } else {
+    cat("MASE:", mase_value, "- 적합\n")
+  }
+}
+
+# MAPE와 MASE의 기준값 설정
+mape_threshold <- 10  # 예시 기준값, 상황에 따라 조정 필요
+mase_threshold <- 1.0 # 예시 기준값, 상황에 따라 조정 필요
+
+
+forecast_vector <- as.vector(restored_forecast)
+actual_data_df <- df[((df$Year == 2023) | 
+                      (df$Year == 2024 & df$Month == 1)), "Va"]
+actual_vector <- as.vector(actual_data_df)
+actual_vector <- as.vector(actual_vector$Va)
+
+mape <- function(actual, forecast) {
+  mean(abs((actual - forecast) / actual)) * 100
+}
+
+mase <- function(actual, forecast, train) {
+  # 실제 값과 예측 값의 절대 차이의 평균 계산
+  mean_absolute_error <- mean(abs(actual - forecast))
+  
+  # 훈련 데이터 세트에서 연속된 관측값의 차이의 절대값의 평균 계산
+mean_absolute_difference <- mean(abs(diff(actual_vector)))
+  
+  # MASE 계산
+  mase_value <- mean_absolute_error / mean_absolute_difference
+  
+  return(mase_value)
+}
+
+# MAPE와 MASE 계산
+mape_value <- mape(actual_vector, forecast_vector)
+mase_value <- mase(actual_vector,forecast_vector , exp(training_ts))
+
+# 결과 출력
+cat("MAPE for 2023:", mape_value, "\n")
+cat("MASE for 2023:", mase_value, "\n")
+
+
+# 성능 평가 및 결과 출력
+evaluate_performance(mape_value, mase_value, mape_threshold, mase_threshold)
+
+
+# Assuming `lm_model` is your linear regression model
+lm_model <- lm(Va_log ~ ., data=training_data)  # Example of fitting a linear model
+
+# Extract R-squared and Adjusted R-squared
+r_squared <- summary(lm_model)$r.squared
+adjusted_r_squared <- summary(lm_model)$adj.r.squared
+
+# Display the results
+cat("R-squared:", r_squared, "\n")
+cat("Adjusted R-squared:", adjusted_r_squared, "\n")
